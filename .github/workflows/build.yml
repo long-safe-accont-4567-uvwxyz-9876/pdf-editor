@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -51,3 +54,17 @@ jobs:
           name: PDFEditor-Portable
           path: dist/PDFEditor/**
           retention-days: 30
+
+      # 发布到 Release，国内镜像站才能代理这个固定链接
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: PDF 编辑器 v1.0.${{ github.run_number }}
+          body: |
+            自动构建的 Windows 安装包与免安装版。
+            安装版：下载 PDFEditor-Setup-*.exe 双击安装。
+            免安装版：解压后在文件夹内双击 PDFEditor.exe。
+          files: dist/PDFEditor-Setup-*.exe
+          draft: false
+          prerelease: false
