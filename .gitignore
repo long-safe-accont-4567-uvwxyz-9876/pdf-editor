@@ -18,3 +18,6 @@ build/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 本地构建产物
+releases/

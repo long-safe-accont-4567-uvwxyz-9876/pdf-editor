@@ -46,7 +46,6 @@ def open_window(url: str, width: int = 1440, height: int = 920) -> str:
             width=width, height=height,
             min_size=(960, 640),
             background_color="#EEF0F3",
-            text_select=False,
         )
         webview.start()
         _WINDOW = None

@@ -70,7 +70,11 @@ def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str
         if win is not None:
             import webview
 
-            kind = webview.SAVE_DIALOG if mode == "save" else webview.OPEN_DIALOG
+            fd = getattr(webview, "FileDialog", None)
+            if fd is not None:
+                kind = fd.SAVE if mode == "save" else fd.OPEN
+            else:
+                kind = webview.SAVE_DIALOG if mode == "save" else webview.OPEN_DIALOG
             kwargs = {"file_types": ("PDF 文件 (*.pdf)", "所有文件 (*.*)")}
             if default_name:
                 kwargs["save_filename"] = default_name
