@@ -286,6 +286,71 @@ button, input, select { font-family: inherit; }
   line-height: 0;
 }
 
+/* 马赛克涂抹层 */
+#mosaicCanvas {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  cursor: crosshair;
+  touch-action: none;
+}
+.page.mosaic-mode .spanLayer,
+.page.mosaic-mode .objectLayer { pointer-events: none; }
+/* 马赛克笔刷轮廓，跟着光标走，能看清笔刷多大 */
+#brushRing {
+  position: absolute;
+  z-index: 16;
+  pointer-events: none;
+  border: 1.5px solid rgba(43, 108, 246, .95);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .95), inset 0 0 0 1px rgba(255, 255, 255, .65);
+  transform: translate(-50%, -50%);
+}
+
+#btnMosaic.active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* 马赛克模式的常驻操作提示 */
+#mosaicHint {
+  position: fixed;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: rgba(22, 28, 36, .92);
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 8px 26px rgba(16, 24, 40, .26);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: hintIn .18s ease-out;
+}
+#mosaicHint b { font-weight: 600; letter-spacing: .3px; }
+#mosaicHint i {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, .28);
+}
+#mosaicHint kbd {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .16);
+  font: inherit;
+  font-size: 12px;
+}
+@keyframes hintIn {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .span {
   position: absolute;
   border-radius: 2px;
@@ -300,6 +365,10 @@ button, input, select { font-family: inherit; }
 /* 选中态只留柔和底色，不画边框 */
 .span.sel {
   background: rgba(43, 108, 246, .15);
+}
+/* 正在编辑的块不显示底色，避免在编辑框边缘漏出颜色 */
+.span.editing {
+  background: transparent !important;
 }
 .span.hit {
   background: rgba(255, 193, 7, .45);

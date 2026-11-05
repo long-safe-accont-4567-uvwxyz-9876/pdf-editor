@@ -108,6 +108,7 @@
           <div class="spanLayer" id="spanLayer"></div>
           <div class="objectLayer" id="objectLayer"></div>
           <canvas id="mosaicCanvas" hidden></canvas>
+          <div id="brushRing" hidden></div>
         </div>
       </div>
     </div>
@@ -223,6 +224,14 @@
 
 <div class="dropzone" id="dropzone"><div>松开即可打开 PDF</div></div>
 <div class="toast" id="toast"></div>
+<div id="mosaicHint" hidden>
+  <b>马赛克</b>
+  <span>按住左键涂抹</span>
+  <i></i>
+  <span>滚轮调笔刷</span>
+  <i></i>
+  <span><kbd>Esc</kbd> 退出</span>
+</div>
 <div class="loading" id="loading" hidden><div class="spinner"></div></div>
 
 <script src="vendor/anime.min.js"></script>

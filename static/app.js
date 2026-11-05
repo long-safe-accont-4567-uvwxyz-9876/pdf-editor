@@ -275,7 +275,15 @@ async function renderPage() {
 
   const info = await apiGet(`/api/spans?doc=${state.docId}&n=${n}`);
 
-  state.items = (info.spans || []).map((s) => ({ ...s, kind: 'span' }));
+  // 已删除 / 已被遮盖的块不再参与交互，否则双击热区会把原文又带回来
+  const gone = new Set(
+    (info.ops || [])
+      .filter((o) => (o.type === 'delete' || o.type === 'redact') && o.spanId)
+      .map((o) => o.spanId),
+  );
+  state.items = (info.spans || [])
+    .filter((s) => !gone.has(s.id))
+    .map((s) => ({ ...s, kind: 'span' }));
   (info.freeTexts || []).forEach((f) => {
     state.items.push({
       id: f.id, kind: 'free', text: f.text, bbox: f.rect, origin: f.origin,
@@ -610,7 +618,7 @@ function attachSpanEvents(div, it) {
   div.addEventListener('dblclick', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    startEdit(it);
+    startEdit(it, e.clientX);
   });
   div.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -696,7 +704,22 @@ function exitDragVisual(div) {
   div.style.background = '';
 }
 
-function startEdit(it) {
+/** 根据鼠标横坐标估算 textarea 内的插入位置 */
+function caretIndexAt(ta, clientX) {
+  const rect = ta.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const text = ta.value || '';
+  if (x <= 0) return 0;
+  let acc = 0;
+  for (let i = 0; i < text.length; i++) {
+    const w = measureTextW(text[i], ta);
+    if (acc + w / 2 > x) return i;
+    acc += w;
+  }
+  return text.length;
+}
+
+function startEdit(it, caretClientX) {
   cancelEdit();
   selectSpan(it.id);
 
@@ -716,13 +739,11 @@ function startEdit(it) {
   // 无边框后，内容起点不再被 border 推移，补偿量从 2 降到 0.5，文字才不会跳
   const left = ptToPx(it.bbox[0] + off[0]) - 0.5;
   const top = ptToPx(it.bbox[1] + off[1]) - 0.5;
-  const baseW = Math.max(ptToPx(it.bbox[2] - it.bbox[0]) + 3, 60);
   const baseH = Math.max(ptToPx(it.bbox[3] - it.bbox[1]) + 1, 14);
 
   Object.assign(ta.style, {
     left: Math.max(0, left) + 'px',
     top: Math.max(0, top) + 'px',
-    width: baseW + 'px',
     minHeight: baseH + 'px',
     font: `${ptToPx(size)}px/1.2 ${fontCss(it.fontLabel)}`,
     color: rgbCss(color),
@@ -732,10 +753,22 @@ function startEdit(it) {
     fontStyle: italic ? 'italic' : 'normal',
   });
 
+  // 宽度贴合文字本身：PDF 的文字块边框常比实际文字宽，照搬会让框右侧多出一截空白
+  const baseW = Math.max(60, measureTextW(text, ta) + 8);
+  ta.style.width = baseW + 'px';
+
   $('page').appendChild(ta);
-  state.editing = { item: it, ta, original: text, baseW, baseH };
+  const spanEl = document.querySelector(`.span[data-id="${it.id}"]`);
+  if (spanEl) spanEl.classList.add('editing');
+  state.editing = { item: it, ta, original: text, baseW, baseH, spanEl };
 
   ta.addEventListener('input', autoGrow);
+  ta.addEventListener('blur', () => {
+    // 点到别处（工具栏、侧栏）时自动保存，别把用户改的字丢了
+    setTimeout(() => {
+      if (state.editing && state.editing.ta === ta) commitEdit();
+    }, 140);
+  });
   ta.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
@@ -747,6 +780,10 @@ function startEdit(it) {
     ta.focus();
     if (ta.dataset.caret) {
       const p = Math.min(Number(ta.dataset.caret) || 0, ta.value.length);
+      ta.setSelectionRange(p, p);
+    } else if (caretClientX != null) {
+      // 双击落点即光标位置，不整段选中，避免一打字把整行覆盖掉
+      const p = caretIndexAt(ta, caretClientX);
       ta.setSelectionRange(p, p);
     } else {
       ta.select();
@@ -782,6 +819,7 @@ function autoGrow() {
 function cancelEdit() {
   if (!state.editing) return;
   state.editing.ta.remove();
+  if (state.editing.spanEl) state.editing.spanEl.classList.remove('editing');
   state.editing = null;
 }
 
@@ -793,6 +831,25 @@ async function commitEdit() {
   if (text === ed.original) { cancelEdit(); return; }
   state.editing = null;
   ed.ta.remove();
+  if (ed.spanEl) ed.spanEl.classList.remove('editing');
+
+  // 内容删光了就直接移除这一块，不留空白热区
+  if (!text.trim()) {
+    try {
+      const op = it.kind === 'free'
+        ? { type: 'remove', id: it.id }
+        : { type: 'delete', page: state.cur, spanId: it.id };
+      await apiPost('/api/edit', { doc: state.docId, op });
+      state.selected = null;
+      await renderPage();
+      showInspector(null);
+      refreshHistory();
+    } catch (e) {
+      toast('删除失败：' + e.message, true);
+    }
+    return;
+  }
+
   await applyItemOp(it, { text });
 }
 
@@ -1552,16 +1609,29 @@ async function commitMosaic() {
   }
 }
 
+function updateBrushRing(clientX, clientY) {
+  const ring = $('brushRing');
+  if (!mosaic.on) return;
+  const pg = $('page').getBoundingClientRect();
+  const size = mosaic.sizePx;
+  ring.style.width = size + 'px';
+  ring.style.height = size + 'px';
+  ring.style.left = (clientX - pg.left) + 'px';
+  ring.style.top = (clientY - pg.top) + 'px';
+  ring.hidden = false;
+}
+
 function setMosaicMode(on) {
   mosaic.on = !!on;
   $('btnMosaic').classList.toggle('active', mosaic.on);
   $('page').classList.toggle('mosaic-mode', mosaic.on);
   $('mosaicCanvas').hidden = !mosaic.on;
+  $('brushRing').hidden = !mosaic.on;
+  $('mosaicHint').hidden = !mosaic.on;
   if (mosaic.on) {
     if (state.editing) cancelEdit();
     selectSpan(null);
     sizeMosaicCanvas();
-    toast('按住鼠标涂抹打马赛克，松手生效；滚轮调笔刷大小');
   } else {
     mosaic.pts = [];
   }
@@ -1588,11 +1658,20 @@ window.addEventListener('mouseup', () => {
   commitMosaic();
 });
 
+$('mosaicCanvas').addEventListener('mousemove', (e) => {
+  updateBrushRing(e.clientX, e.clientY);
+});
+
+$('mosaicCanvas').addEventListener('mouseleave', () => {
+  $('brushRing').hidden = true;
+});
+
 $('mosaicCanvas').addEventListener('wheel', (e) => {
   if (!mosaic.on) return;
   e.preventDefault();
   mosaic.sizePx = Math.max(14, Math.min(220, mosaic.sizePx + (e.deltaY < 0 ? 8 : -8)));
   redrawMosaic();
+  updateBrushRing(e.clientX, e.clientY);
 }, { passive: false });
 
 
