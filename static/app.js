@@ -187,6 +187,7 @@ async function adoptDocument(d) {
   $('stage').hidden = false;
   $('btnExport').disabled = false;
   $('btnAddText').disabled = false;
+  $('btnMosaic').disabled = false;
   $('btnFind').disabled = false;
   $('btnPage').disabled = false;
   $('pageCount').textContent = d.pageCount;
@@ -303,6 +304,7 @@ async function renderPage() {
   buildBgSampler(img);
   refreshThumb(n);
   animatePage();
+  if (mosaic.on) sizeMosaicCanvas();
 }
 
 /** 编辑后同步当前页缩略图，避免左侧还是旧画面 */
@@ -1344,6 +1346,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'Escape') {
+    if (mosaic.on) { setMosaicMode(false); return; }
     if (state.editing) { e.preventDefault(); cancelEdit(); return; }
     if (!$('findbar').hidden) { toggleFind(false); return; }
   }
@@ -1411,6 +1414,188 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => fitToWidth(), 240);
 });
+
+/* ------------------------------------------------------------ 马赛克涂抹 */
+const mosaic = {
+  on: false,
+  drawing: false,
+  pts: [],         // 屏幕坐标轨迹
+  sizePx: 46,      // 笔刷直径（屏幕像素）
+  blockPt: 5.0,    // 马赛克块大小（PDF 点）
+  tmp: document.createElement('canvas'),
+  mask: document.createElement('canvas'),
+};
+
+/** 屏幕像素 → PDF 点 的比例，用页面图像的实际显示宽度换算 */
+function mosaicScale() {
+  const img = $('pageImg');
+  const pw = (state.pages[state.cur] || [595])[0];
+  return img.clientWidth ? img.clientWidth / pw : pxPerPt();
+}
+
+function sizeMosaicCanvas() {
+  const cv = $('mosaicCanvas');
+  const img = $('pageImg');
+  const w = img.clientWidth;
+  const h = img.clientHeight;
+  if (!w || !h) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px';
+  cv.style.height = h + 'px';
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+
+/**
+ * 整块重绘：把整条轨迹的包围盒一次性做成马赛克，再用轨迹圆做遮罩。
+ * 逐点各自采样会导致色块互相覆盖、看起来斑驳。
+ */
+function redrawMosaic() {
+  const cv = $('mosaicCanvas');
+  const img = $('pageImg');
+  const pts = mosaic.pts;
+  const W = img.clientWidth;
+  const H = img.clientHeight;
+  if (!W || !H) return;
+
+  const ctx = cv.getContext('2d');
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.restore();
+  if (!pts.length || !img.naturalWidth) return;
+
+  const r = mosaic.sizePx / 2;
+  let x0 = W, y0 = H, x1 = 0, y1 = 0;
+  for (const p of pts) {
+    if (p.x < x0) x0 = p.x;
+    if (p.x > x1) x1 = p.x;
+    if (p.y < y0) y0 = p.y;
+    if (p.y > y1) y1 = p.y;
+  }
+  x0 = Math.max(0, x0 - r);
+  y0 = Math.max(0, y0 - r);
+  x1 = Math.min(W, x1 + r);
+  y1 = Math.min(H, y1 + r);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w < 2 || h < 2) return;
+
+  const k = img.naturalWidth / W;
+  // 与最终效果保持同一块尺寸，做到所见即所得
+  const blockPx = Math.max(2, mosaic.blockPt * mosaicScale());
+  const bw = Math.max(2, Math.round(w / blockPx));
+  const bh = Math.max(2, Math.round(h / blockPx));
+  const t = mosaic.tmp;
+  t.width = bw;
+  t.height = bh;
+  const tc = t.getContext('2d');
+  tc.imageSmoothingEnabled = true;
+  tc.drawImage(img, x0 * k, y0 * k, w * k, h * k, 0, 0, bw, bh);
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(t, 0, 0, bw, bh, x0, y0, w, h);
+
+  const m = mosaic.mask;
+  if (m.width !== Math.round(W) || m.height !== Math.round(H)) {
+    m.width = Math.round(W);
+    m.height = Math.round(H);
+  }
+  const mc = m.getContext('2d');
+  mc.clearRect(0, 0, m.width, m.height);
+  mc.fillStyle = '#fff';
+  for (const p of pts) {
+    mc.beginPath();
+    mc.arc(p.x, p.y, r, 0, Math.PI * 2);
+    mc.fill();
+  }
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(m, 0, 0, m.width, m.height, 0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function addMosaicPoint(clientX, clientY) {
+  const cv = $('mosaicCanvas');
+  const box = cv.getBoundingClientRect();
+  const x = clientX - box.left;
+  const y = clientY - box.top;
+  if (x < 0 || y < 0 || x > box.width || y > box.height) return;
+  const last = mosaic.pts[mosaic.pts.length - 1];
+  if (last && Math.hypot(x - last.x, y - last.y) < 2) return;
+  mosaic.pts.push({ x, y });
+  redrawMosaic();
+}
+
+async function commitMosaic() {
+  const pts = mosaic.pts;
+  mosaic.pts = [];
+  if (!pts.length) return;
+  const s = mosaicScale();
+  const r = mosaic.sizePx / 2 / s;
+  const strokes = pts.map((p) => ({ x: p.x / s, y: p.y / s, r }));
+  setBusy(true);
+  try {
+    await apiPost('/api/edit', {
+      doc: state.docId,
+      op: { type: 'mosaic', page: state.cur, strokes, block: mosaic.blockPt },
+    });
+    await renderPage();
+    refreshHistory();
+  } catch (e) {
+    toast('马赛克失败：' + e.message, true);
+  } finally {
+    setBusy(false);
+    if (mosaic.on) sizeMosaicCanvas();
+  }
+}
+
+function setMosaicMode(on) {
+  mosaic.on = !!on;
+  $('btnMosaic').classList.toggle('active', mosaic.on);
+  $('page').classList.toggle('mosaic-mode', mosaic.on);
+  $('mosaicCanvas').hidden = !mosaic.on;
+  if (mosaic.on) {
+    if (state.editing) cancelEdit();
+    selectSpan(null);
+    sizeMosaicCanvas();
+    toast('按住鼠标涂抹打马赛克，松手生效；滚轮调笔刷大小');
+  } else {
+    mosaic.pts = [];
+  }
+}
+
+$('btnMosaic').addEventListener('click', () => setMosaicMode(!mosaic.on));
+
+$('mosaicCanvas').addEventListener('mousedown', (e) => {
+  if (!mosaic.on || e.button !== 0) return;
+  e.preventDefault();
+  mosaic.drawing = true;
+  mosaic.pts = [];
+  addMosaicPoint(e.clientX, e.clientY);
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!mosaic.drawing) return;
+  addMosaicPoint(e.clientX, e.clientY);
+});
+
+window.addEventListener('mouseup', () => {
+  if (!mosaic.drawing) return;
+  mosaic.drawing = false;
+  commitMosaic();
+});
+
+$('mosaicCanvas').addEventListener('wheel', (e) => {
+  if (!mosaic.on) return;
+  e.preventDefault();
+  mosaic.sizePx = Math.max(14, Math.min(220, mosaic.sizePx + (e.deltaY < 0 ? 8 : -8)));
+  redrawMosaic();
+}, { passive: false });
+
+
 
 $('zoomLabel').textContent = '100%';
 floatArt();

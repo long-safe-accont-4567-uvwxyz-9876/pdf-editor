@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -38,6 +39,35 @@ _FONT_RULES = [
     (("verdana",), "verdana.ttf", "verdanab.ttf", "Verdana"),
     (("cambria",), "cambria.ttc", "cambriab.ttf", "Cambria"),
 ]
+
+
+def _mosaic_bytes(src: bytes, w: int, h: int, block: int) -> bytes:
+    """块平均马赛克。纯 Python 实现，避免引入图像库依赖。"""
+    out = bytearray(src)
+    for by in range(0, h, block):
+        y_end = min(by + block, h)
+        for bx in range(0, w, block):
+            x_end = min(bx + block, w)
+            r = g = b = 0
+            n = (y_end - by) * (x_end - bx)
+            for yy in range(by, y_end):
+                base = yy * w
+                for xx in range(bx, x_end):
+                    i = (base + xx) * 3
+                    r += src[i]
+                    g += src[i + 1]
+                    b += src[i + 2]
+            r //= n
+            g //= n
+            b //= n
+            for yy in range(by, y_end):
+                base = yy * w
+                for xx in range(bx, x_end):
+                    i = (base + xx) * 3
+                    out[i] = r
+                    out[i + 1] = g
+                    out[i + 2] = b
+    return bytes(out)
 
 
 def _norm(name: str) -> str:
@@ -344,6 +374,8 @@ class DocSession:
                 result = self._op_delete(op)
             elif typ == "redact":
                 result = self._op_redact(op)
+            elif typ == "mosaic":
+                result = self._op_mosaic(op)
             elif typ == "freeText":
                 result = self._op_free_text(op)
             elif typ == "image":
@@ -441,6 +473,75 @@ class DocSession:
         }
         self.ops.append(rec)
         return rec
+
+    def _op_mosaic(self, op: dict) -> dict:
+        """涂抹式马赛克：记录笔刷轨迹，导出时按轨迹贴像素化图像。"""
+        page = int(op.get("page", 0))
+        strokes = []
+        for s in op.get("strokes") or []:
+            try:
+                strokes.append({
+                    "x": float(s["x"]), "y": float(s["y"]),
+                    "r": max(1.0, float(s.get("r", 6))),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        if not strokes:
+            raise ValueError("没有涂抹轨迹")
+        rec = {
+            "type": "mosaic", "page": page, "strokes": strokes,
+            "block": max(1.0, float(op.get("block", 2.4))),
+        }
+        self.ops.append(rec)
+        return rec
+
+    def _draw_mosaic(self, page: pymupdf.Page, op: dict) -> None:
+        strokes = op.get("strokes") or []
+        if not strokes:
+            return
+        rect = pymupdf.Rect(
+            min(s["x"] - s["r"] for s in strokes),
+            min(s["y"] - s["r"] for s in strokes),
+            max(s["x"] + s["r"] for s in strokes),
+            max(s["y"] + s["r"] for s in strokes),
+        ) & page.rect
+        if rect.is_empty or rect.width < 1 or rect.height < 1:
+            return
+
+        zoom = 2.0
+        pix = page.get_pixmap(clip=rect, matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+        w, h = pix.width, pix.height
+        if not w or not h:
+            return
+        src = pix.samples
+
+        block = max(3, int(float(op.get("block", 2.4)) * zoom))
+        mos = _mosaic_bytes(src, w, h, block)
+
+        # 只保留笔刷扫过的像素，其余保持原样
+        mask = bytearray(w * h)
+        for s in strokes:
+            cx = (s["x"] - rect.x0) * zoom
+            cy = (s["y"] - rect.y0) * zoom
+            r = s["r"] * zoom
+            for yy in range(max(0, int(cy - r)), min(h, int(cy + r) + 1)):
+                dy = yy + 0.5 - cy
+                span = r * r - dy * dy
+                if span <= 0:
+                    continue
+                half = math.sqrt(span)
+                base = yy * w
+                for xx in range(max(0, int(cx - half)), min(w, int(cx + half) + 1)):
+                    mask[base + xx] = 1
+
+        out = bytearray(src)
+        for i in range(w * h):
+            if mask[i]:
+                j = i * 3
+                out[j:j + 3] = mos[j:j + 3]
+
+        patch = pymupdf.Pixmap(pymupdf.csRGB, w, h, bytes(out), 0)
+        page.insert_image(rect, pixmap=patch, overlay=True)
 
     def _op_free_text(self, op: dict) -> dict:
         """在空白处新增文字（不属于原文档任何文字块）。"""
@@ -730,6 +831,11 @@ class DocSession:
                     r = pymupdf.Rect(b[0] - 0.6, b[1] - 0.6, b[2] + 0.6, b[3] + 0.6)
                     page.draw_rect(r, color=None, fill=tuple(op.get("fill") or (1, 1, 1)),
                                    overlay=True)
+
+            # 3) 马赛克最后贴，盖在其他内容之上
+            for op in ops:
+                if op["type"] == "mosaic":
+                    self._draw_mosaic(page, op)
 
         # 3) 页面级操作：先旋转、再追加空白页、最后倒序删除（都基于原始页码）
         for o in page_ops:

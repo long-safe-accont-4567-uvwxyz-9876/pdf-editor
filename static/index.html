@@ -49,6 +49,10 @@
       图片
       <input type="file" id="fileImage" accept="image/*" hidden>
     </label>
+    <button id="btnMosaic" class="btn" disabled title="按住鼠标涂抹打马赛克">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="4" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="4" height="5" rx="1"/><rect x="3" y="17" width="5" height="4" rx="1"/><rect x="10" y="17" width="5" height="4" rx="1"/><rect x="17" y="17" width="4" height="4" rx="1"/></svg>
+      马赛克
+    </button>
 
     <span class="vsep"></span>
 
@@ -103,6 +107,7 @@
           <img id="pageImg" alt="">
           <div class="spanLayer" id="spanLayer"></div>
           <div class="objectLayer" id="objectLayer"></div>
+          <canvas id="mosaicCanvas" hidden></canvas>
         </div>
       </div>
     </div>
@@ -173,7 +178,7 @@
           <input type="number" id="inpY" step="1">
         </div>
       </div>
-      <button class="btn full" id="btnRedact">涂白遮盖（打码）</button>
+      <button class="btn full" id="btnRedact">涂白遮盖（彻底删除文字）</button>
       <button class="btn btn-danger full" id="btnDelete">删除这段文字</button>
       <div class="edit-flag" id="editFlag" hidden>此文字块已修改</div>
     </div>
