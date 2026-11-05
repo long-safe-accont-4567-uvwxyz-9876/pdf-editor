@@ -426,7 +426,8 @@ function sampleBg(bbox) {
     const put = (px, py) => {
       if (px < 0 || py < 0 || px >= bgSampler.cv.width || py >= bgSampler.cv.height) return;
       const d = bgSampler.ctx.getImageData(px, py, 1, 1).data;
-      const k = ((d[0] >> 3) << 10) | ((d[1] >> 3) << 5) | (d[2] >> 3);
+      // 保留完整色值，量化会让遮挡色和页面差出一档，露出方块边界
+      const k = (d[0] << 16) | (d[1] << 8) | d[2];
       counts.set(k, (counts.get(k) || 0) + 1);
     };
     for (let x = x0; x < x1; x += 2) { put(x, y0 - pad); put(x, y1 + pad); }
@@ -434,7 +435,7 @@ function sampleBg(bbox) {
     if (!counts.size) return '#ffffff';
     let best = 0, bestN = -1;
     for (const [k, v] of counts) if (v > bestN) { bestN = v; best = k; }
-    return `rgb(${((best >> 10) & 31) << 3},${((best >> 5) & 31) << 3},${(best & 31) << 3})`;
+    return `rgb(${(best >> 16) & 255},${(best >> 8) & 255},${best & 255})`;
   } catch (e) {
     return '#ffffff';
   }
@@ -710,10 +711,11 @@ function startEdit(it) {
   ta.value = text;
 
   const off = (op && op.offset) || [0, 0];
-  const left = ptToPx(it.bbox[0] + off[0]) - 2;
-  const top = ptToPx(it.bbox[1] + off[1]) - 2;
-  const baseW = Math.max(ptToPx(it.bbox[2] - it.bbox[0]) + 6, 60);
-  const baseH = Math.max(ptToPx(it.bbox[3] - it.bbox[1]) + 4, 14);
+  // 无边框后，内容起点不再被 border 推移，补偿量从 2 降到 0.5，文字才不会跳
+  const left = ptToPx(it.bbox[0] + off[0]) - 0.5;
+  const top = ptToPx(it.bbox[1] + off[1]) - 0.5;
+  const baseW = Math.max(ptToPx(it.bbox[2] - it.bbox[0]) + 3, 60);
+  const baseH = Math.max(ptToPx(it.bbox[3] - it.bbox[1]) + 1, 14);
 
   Object.assign(ta.style, {
     left: Math.max(0, left) + 'px',
@@ -738,15 +740,39 @@ function startEdit(it) {
     else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); }
   });
 
-  requestAnimationFrame(() => { autoGrow(); ta.focus(); ta.select(); });
+  requestAnimationFrame(() => {
+    autoGrow();
+    ta.focus();
+    if (ta.dataset.caret) {
+      const p = Math.min(Number(ta.dataset.caret) || 0, ta.value.length);
+      ta.setSelectionRange(p, p);
+    } else {
+      ta.select();
+    }
+  });
+}
+
+let _measCtx = null;
+function measureTextW(text, el) {
+  if (!_measCtx) _measCtx = document.createElement('canvas').getContext('2d');
+  const cs = getComputedStyle(el);
+  _measCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  let w = 0;
+  String(text || '').split('\n').forEach((line) => {
+    w = Math.max(w, _measCtx.measureText(line).width);
+  });
+  return w;
 }
 
 function autoGrow() {
   if (!state.editing) return;
   const { ta, baseW, baseH } = state.editing;
-  ta.style.width = baseW + 'px';
-  const needW = ta.scrollWidth + 4;
-  if (needW > baseW) ta.style.width = needW + 'px';
+  // 用实测文本宽度定宽，否则 textarea 先折行、scrollWidth 永远不比容器宽，字会被竖排挤成两行
+  const pageW = ptToPx((state.pages[state.cur] || [595])[0]);
+  const left = parseFloat(ta.style.left) || 0;
+  const cap = Math.max(baseW, pageW - left - 6);
+  const want = Math.max(baseW, measureTextW(ta.value, ta) + 6);
+  ta.style.width = Math.min(want, cap) + 'px';
   ta.style.height = 'auto';
   ta.style.height = Math.max(ta.scrollHeight, baseH) + 'px';
 }
@@ -881,6 +907,31 @@ document.querySelectorAll('#alignSeg button').forEach((b) => {
     const it = findItem(state.selected);
     if (it) applyItemOp(it, { align: b.dataset.align });
   });
+});
+
+$('btnRedact').addEventListener('click', async () => {
+  const it = findItem(state.selected);
+  if (!it) return;
+  // 取样当前底色，盖上去才不会在白纸之外的地方露馅
+  const bg = sampleBg(it.bbox);
+  const m = bg.match(/(\d+)\D+(\d+)\D+(\d+)/);
+  const fill = m ? [Number(m[1]) / 255, Number(m[2]) / 255, Number(m[3]) / 255] : [1, 1, 1];
+  setBusy(true);
+  try {
+    const op = it.kind === 'free'
+      ? { type: 'remove', id: it.id }
+      : { type: 'redact', page: state.cur, spanId: it.id, fill };
+    await apiPost('/api/edit', { doc: state.docId, op });
+    state.selected = null;
+    await renderPage();
+    showInspector(null);
+    refreshHistory();
+    toast('已遮盖');
+  } catch (e) {
+    toast('遮盖失败：' + e.message, true);
+  } finally {
+    setBusy(false);
+  }
 });
 
 $('btnDelete').addEventListener('click', async () => {
@@ -1305,6 +1356,21 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (state.selectedImage) $('btnDelImage').click();
     else $('btnDelete').click();
+    return;
+  }
+
+  // 选中文字后直接敲键就改字，和 Word / 微信一样，不用先双击
+  if (state.selected && !mod && !e.altKey && e.key.length === 1) {
+    const it = findItem(state.selected);
+    if (!it) return;
+    e.preventDefault();
+    startEdit(it);
+    const ta = state.editing && state.editing.ta;
+    if (ta) {
+      ta.value = e.key;
+      ta.dataset.caret = String(e.key.length);
+      autoGrow();
+    }
     return;
   }
 

@@ -342,6 +342,8 @@ class DocSession:
                 result = self._op_text(op)
             elif typ == "delete":
                 result = self._op_delete(op)
+            elif typ == "redact":
+                result = self._op_redact(op)
             elif typ == "freeText":
                 result = self._op_free_text(op)
             elif typ == "image":
@@ -420,6 +422,22 @@ class DocSession:
         rec = {
             "type": "delete", "page": page, "spanId": op["spanId"],
             "bbox": span["bbox"], "_spanText": span["text"],
+        }
+        self.ops.append(rec)
+        return rec
+
+    def _op_redact(self, op: dict) -> dict:
+        """涂色遮盖：先真擦除原文字，再铺一块底色，视觉上等同于涂改带。"""
+        page = int(op.get("page", 0))
+        span = self.find_span(page, op.get("spanId"))
+        if span is None:
+            raise ValueError("文字块不存在")
+        self.ops = [o for o in self.ops if o.get("spanId") != op.get("spanId")]
+        fill = op.get("fill") or [1, 1, 1]
+        fill = [max(0.0, min(1.0, float(c))) for c in fill][:3]
+        rec = {
+            "type": "redact", "page": page, "spanId": op["spanId"],
+            "bbox": span["bbox"], "fill": fill, "_spanText": span["text"],
         }
         self.ops.append(rec)
         return rec
@@ -623,7 +641,7 @@ class DocSession:
         for o in self.ops:
             if o.get("type") == "text" and o.get("spanId") == span["id"]:
                 return o.get("text", "")
-            if o.get("type") == "delete" and o.get("spanId") == span["id"]:
+            if o.get("type") in ("delete", "redact") and o.get("spanId") == span["id"]:
                 return ""
         return span["text"]
 
@@ -689,7 +707,7 @@ class DocSession:
             # 1) 批量擦除（擦除会吞掉区域内图形，故关闭 graphics/images 处理）
             need_redact = False
             for op in ops:
-                if op["type"] in ("text", "delete"):
+                if op["type"] in ("text", "delete", "redact"):
                     b = op["bbox"]
                     rect = pymupdf.Rect(b[0] - 0.6, b[1] - 0.6, b[2] + 0.6, b[3] + 0.6)
                     page.add_redact_annot(rect, fill=None)
@@ -707,6 +725,11 @@ class DocSession:
                     self._write_text(page, op)
                 elif op["type"] == "image":
                     self._write_image(page, op)
+                elif op["type"] == "redact":
+                    b = op["bbox"]
+                    r = pymupdf.Rect(b[0] - 0.6, b[1] - 0.6, b[2] + 0.6, b[3] + 0.6)
+                    page.draw_rect(r, color=None, fill=tuple(op.get("fill") or (1, 1, 1)),
+                                   overlay=True)
 
         # 3) 页面级操作：先旋转、再追加空白页、最后倒序删除（都基于原始页码）
         for o in page_ops:

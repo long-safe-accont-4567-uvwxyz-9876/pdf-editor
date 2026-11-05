@@ -264,6 +264,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self._doc_payload(sess))
 
         if path == "/api/openlocal":
+            data = self._body_json()
             target = (data.get("path") or "").strip()
             if not target or not os.path.exists(target):
                 return self._err("文件不存在：" + target, 404)

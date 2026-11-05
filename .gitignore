@@ -21,3 +21,5 @@ desktop.ini
 
 # 本地构建产物
 releases/
+
+.mdbwork/

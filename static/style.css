@@ -295,30 +295,24 @@ button, input, select { font-family: inherit; }
   transition: background .1s, box-shadow .1s;
 }
 .span:hover {
-  background: rgba(43, 108, 246, .10);
-  box-shadow: inset 0 0 0 1px rgba(43, 108, 246, .38);
+  background: rgba(43, 108, 246, .07);
 }
+/* 选中态只留柔和底色，不画边框 */
 .span.sel {
-  background: rgba(43, 108, 246, .13);
-  box-shadow: inset 0 0 0 1.5px var(--brand);
+  background: rgba(43, 108, 246, .15);
 }
-.span.edited::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border: 1px dashed #d98b00;
-  border-radius: 3px;
-  pointer-events: none;
+.span.hit {
+  background: rgba(255, 193, 7, .45);
+  box-shadow: none;
 }
 
-/* 就地编辑 */
+/* 就地编辑：无边框，视觉上等同直接改字 */
 .editbox {
   position: absolute;
   z-index: 20;
-  border: 1.5px solid var(--brand);
-  border-radius: 2px;
-  /* 双层描边：任何底色下都能看清编辑边界 */
-  box-shadow: 0 0 0 1.5px #fff, 0 0 0 3.5px rgba(43, 108, 246, .55), 0 4px 14px rgba(16, 24, 40, .18);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   background: #fff;
   padding: 0;
   margin: 0;
@@ -329,7 +323,10 @@ button, input, select { font-family: inherit; }
   white-space: pre-wrap;
   word-break: break-word;
   display: block;
+  caret-color: var(--brand);
+  /* 选区用半透明蓝，和系统一致 */
 }
+.editbox::selection { background: rgba(43, 108, 246, .28); }
 
 /* ============ 属性面板 ============ */
 .ins-empty {
