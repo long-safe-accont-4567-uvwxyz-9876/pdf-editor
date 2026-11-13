@@ -11,8 +11,9 @@ binaries = []
 hiddenimports = []
 
 # pywebview / pythonnet 需要连同其原生组件一起收集，否则运行时报找不到 CLR
-# pdf2docx / cv2 / docx 用于 PDF ↔ Word 转换，必须把数据文件与扩展模块一并带上
-for pkg in ("webview", "pythonnet", "clr_loader", "pdf2docx", "docx", "cv2"):
+# 注意：PDF→Word 走内置 pdf_to_word.py（仅依赖 pymupdf），
+# 不再需要 pdf2docx / cv2 / docx，别把它们塞进包里白占 60MB
+for pkg in ("webview", "pythonnet", "clr_loader"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

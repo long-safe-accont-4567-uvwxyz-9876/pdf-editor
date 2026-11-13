@@ -332,6 +332,27 @@ class Handler(BaseHTTPRequestHandler):
             sess.reset()
             return self._json({"ok": True, "opCount": 0})
 
+        if path == "/api/convert/current":
+            # 当前正在编辑的文档直接转 Word，省得用户再去翻一遍路径
+            sess = ENGINE.get(data.get("doc", ""))
+            src = getattr(sess, "src", None)
+            if not src or not os.path.exists(src):
+                return self._err("当前文档没有可用的源文件", 400)
+            try:
+                stem = os.path.splitext(sess.name)[0]
+                dst = pick_dialog("save", default_name=stem + ".docx",
+                                  initial_dir=default_save_dir(sess),
+                                  file_types=("Word 文档 (*.docx)", "*.docx"),
+                                  title="保存为 Word 文档", ext="docx")
+                if not dst:
+                    return self._json({"ok": False, "cancelled": True})
+                if not dst.lower().endswith(".docx"):
+                    dst += ".docx"
+                return self._json(converter.pdf_to_word(src, dst))
+            except Exception as e:
+                traceback.print_exc()
+                return self._json({"ok": False, "error": str(e)})
+
         if path == "/api/convert/pick":
             mode = str(data.get("mode") or "")
             if mode not in ("pdf2word", "word2pdf"):

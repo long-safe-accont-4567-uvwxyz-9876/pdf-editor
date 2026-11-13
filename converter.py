@@ -1,6 +1,7 @@
 """文档格式转换 —— PDF 与 Word 互转。
 
-PDF → Word：使用 pdf2docx（保留段落、图片、表格与近似排版）。
+PDF → Word：内置转换器（pdf_to_word.py），只依赖 PyMuPDF，零额外依赖。
+            保留段落、字号、颜色、粗斜体、图片；扫描件则整页转图。
 Word → PDF：调用本机已安装的 Word / WPS 通过 COM 导出，保真度最高，
             不额外引入运行时依赖；两者都没装时给出明确提示。
 
@@ -24,27 +25,25 @@ def _ensure_parent(path: str) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-def pdf_to_word(src: str, dst: str) -> dict:
-    """PDF → docx。"""
+def pdf_to_word_fn(src: str, dst: str, progress=None) -> dict:
+    """PDF → docx，走内置转换器。"""
+    import pdf_to_word as engine  # 局部导入：避免与本函数同名遮蔽
+
+    if not os.path.exists(src):
+        raise RuntimeError("文件不存在：" + src)
     t0 = time.time()
-    try:
-        from pdf2docx import Converter
-    except ImportError as e:
-        raise RuntimeError("缺少 PDF 转 Word 组件（pdf2docx），请重新安装完整版本") from e
-
     _ensure_parent(dst)
-    cv = Converter(src)
-    try:
-        cv.convert(dst)
-    finally:
-        try:
-            cv.close()
-        except Exception:
-            pass
-
-    if not os.path.exists(dst) or os.path.getsize(dst) == 0:
-        raise RuntimeError("转换完成但未生成文件，可能是扫描版 PDF（纯图片，无文字层）")
-    return {"ok": True, "path": dst, "seconds": round(time.time() - t0, 1)}
+    r = engine.convert(src, dst, progress=progress)
+    return {
+        "ok": True,
+        "path": r.get("path", dst),
+        "seconds": round(time.time() - t0, 1),
+        "pages": r.get("pages", 0),
+        "chars": r.get("chars", 0),
+        "images": r.get("images", 0),
+        # 没有文字层 → 转换结果是整页图片，前端需要提示用户
+        "scanned": bool(r.get("scanned")),
+    }
 
 
 _PS_SCRIPT = r"""
@@ -157,9 +156,9 @@ def word_to_pdf(src: str, dst: str) -> dict:
 
 
 def can_convert() -> dict:
-    try:
-        import pdf2docx  # noqa: F401
-        to_word = True
-    except Exception:
-        to_word = False
-    return {"pdf2word": to_word, "word2pdf": _office_available()}
+    """返回两条转换路径是否可用。PDF→Word 是纯内置实现，恒定可用。"""
+    return {"pdf2word": True, "word2pdf": _office_available()}
+
+
+# 兼容旧调用名
+pdf_to_word = pdf_to_word_fn

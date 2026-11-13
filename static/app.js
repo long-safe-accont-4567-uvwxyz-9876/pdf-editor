@@ -1251,27 +1251,36 @@ document.addEventListener('click', () => $('pageMenu').classList.remove('open'))
 /* ------------------------------------------------------------ 格式转换 */
 $('btnConvert').addEventListener('click', (e) => {
   e.stopPropagation();
+  // 没打开文档时「当前文档转 Word」不可选
+  const cur = $('miCur2Word');
+  if (cur) cur.disabled = !state.docId;
   $('convertMenu').classList.toggle('open');
 });
 document.addEventListener('click', () => $('convertMenu').classList.remove('open'));
 
 $('convertMenu').addEventListener('click', async (e) => {
   const btn = e.target.closest('button');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   $('convertMenu').classList.remove('open');
   await runConvert(btn.dataset.mode);
 });
 
 async function runConvert(mode) {
   if (state.busy) return;
-  const label = mode === 'pdf2word' ? 'PDF 转 Word' : 'Word 转 PDF';
+  const label = mode === 'word2pdf' ? 'Word 转 PDF' : 'PDF 转 Word';
   setBusy(true, `正在转换，请稍候…（${label}）`);
   try {
-    const r = await apiPost('/api/convert/pick', { mode });
+    const url = mode === 'cur2word' ? '/api/convert/current' : '/api/convert/pick';
+    const r = await apiPost(url, mode === 'cur2word' ? { doc: state.docId } : { mode });
     if (!r || r.cancelled) return;
     if (!r.ok) throw new Error(r.error || '转换失败');
     const name = String(r.path || '').split(/[\\/]/).pop();
-    toast(`${label}完成：${name}（用时 ${r.seconds}s）`, false, 4500);
+    const stat = r.pages ? ` · ${r.pages} 页` : '';
+    toast(`${label}完成：${name}（用时 ${r.seconds}s${stat}）`, false, 4500);
+    // 扫描件没有文字层，转出来是整页图片，得说清楚否则用户会以为转坏了
+    if (r.scanned) {
+      toast('这是扫描版 PDF（无可提取文字），已按页转成图片放进 Word', true, 8000);
+    }
     apiPost('/api/reveal', { path: r.path }).catch(() => {});
   } catch (err) {
     toast(`${label}失败：${err.message}`, true, 6500);
