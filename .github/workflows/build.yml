@@ -25,9 +25,9 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          # PDF→Word 由内置 pdf_to_word.py 实现（仅需 pymupdf），
-          # 不再安装 pdf2docx —— 它会拖进 opencv/numpy/python-docx，白胖 40MB
-          pip install pymupdf pywebview pyinstaller
+          # 转换全部内置，不需要 Word / WPS / LibreOffice：
+          #   PDF→Word 用 pymupdf；Word→PDF 用 python-docx 读 + reportlab 排版
+          pip install pymupdf pywebview pyinstaller python-docx reportlab
 
       - name: 打包主程序
         run: pyinstaller --noconfirm PDFEditor.spec

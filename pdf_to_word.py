@@ -247,8 +247,25 @@ def _para_xml(lines: list[list[dict]], page_w: float, left: float, right: float)
     x0 = min(s["bbox"][0] for s in lines[0])
 
     ind_left = max(0, x0 - left)
+
+    # 行距按原 PDF 的实测行间距算，而不是一律写死 1.5 倍。
+    # 写死会让「PDF→Word→PDF」来回转时行距逐轮变大，最后多出空白页。
+    leading = max(size, 1.0) * 1.15
+    if len(lines) >= 2:
+        gaps = []
+        for i in range(1, len(lines)):
+            y_prev = min(s["bbox"][1] for s in lines[i - 1])
+            y_cur = min(s["bbox"][1] for s in lines[i])
+            g = y_cur - y_prev
+            if 0.5 * size <= g <= 4 * size:
+                gaps.append(g)
+        if gaps:
+            gaps.sort()
+            leading = gaps[len(gaps) // 2]
+
     ppr = [
-        f'<w:spacing w:line="{int(round(max(size, 1) * 1.5 * 20))}" w:lineRule="atLeast"/>',
+        f'<w:spacing w:line="{_tw(leading)}" w:lineRule="atLeast"'
+        f' w:before="0" w:after="0"/>',
         f'<w:ind w:left="{_tw(ind_left)}"/>',
     ]
 

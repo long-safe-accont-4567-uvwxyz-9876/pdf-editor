@@ -375,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(converter.pdf_to_word(src, dst))
 
                 src = pick_dialog("open",
-                                  file_types=("Word 文档 (*.docx;*.doc;*.rtf)", "*.docx;*.doc;*.rtf"),
+                                  file_types=("Word 文档 (*.docx)", "*.docx"),
                                   title="选择要转成 PDF 的 Word 文档")
                 if not src:
                     return self._json({"ok": False, "cancelled": True})

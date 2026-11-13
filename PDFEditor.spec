@@ -11,9 +11,9 @@ binaries = []
 hiddenimports = []
 
 # pywebview / pythonnet 需要连同其原生组件一起收集，否则运行时报找不到 CLR
-# 注意：PDF→Word 走内置 pdf_to_word.py（仅依赖 pymupdf），
-# 不再需要 pdf2docx / cv2 / docx，别把它们塞进包里白占 60MB
-for pkg in ("webview", "pythonnet", "clr_loader"):
+# 转换全部内置：PDF→Word 用 pymupdf，Word→PDF 用 python-docx + reportlab，
+# 都不需要 Word / WPS / LibreOffice，也不需要 pdf2docx / cv2
+for pkg in ("webview", "pythonnet", "clr_loader", "reportlab", "docx"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -21,6 +21,12 @@ for pkg in ("webview", "pythonnet", "clr_loader"):
         hiddenimports += h
     except Exception:
         pass
+
+hiddenimports += [
+    "word_to_pdf", "pdf_to_word", "converter",
+    "reportlab.pdfbase._fontdata_enc_winansi",
+    "reportlab.graphics.barcode",
+]
 
 # PyMuPDF 2.x 的 wheel 里带了一整套 AI 版面分析模型（layout/ 目录，约 50MB：
 # onnx 模型 + 字体 + libtesseract 等）。本编辑器只做文字/图片的提取与写入，
