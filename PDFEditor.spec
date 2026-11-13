@@ -22,17 +22,20 @@ for pkg in ("webview", "pythonnet", "clr_loader"):
     except Exception:
         pass
 
+# PyMuPDF 2.1 自带一套 AI 版面分析模型（onnx，约 30MB），本编辑器只做文字/图片
+# 的提取与写入，完全用不到它，排除掉能显著减小安装包
 a = Analysis(
     ["app.py"],
     pathex=[],
     binaries=binaries,
-    datas=datas,
+    datas=[(p, dst) for (p, dst) in datas if "onnx" not in p.lower()],
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[
         "tkinter", "matplotlib", "pandas", "scipy",
         "PyQt5", "PySide2", "PySide6", "IPython", "pytest",
+        "pymupdf.pymupdf_layout", "pymupdf.layout",
     ],
     noarchive=False,
 )
