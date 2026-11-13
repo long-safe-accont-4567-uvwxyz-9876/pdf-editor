@@ -11,7 +11,8 @@ binaries = []
 hiddenimports = []
 
 # pywebview / pythonnet 需要连同其原生组件一起收集，否则运行时报找不到 CLR
-for pkg in ("webview", "pythonnet", "clr_loader"):
+# pdf2docx / cv2 / docx 用于 PDF ↔ Word 转换，必须把数据文件与扩展模块一并带上
+for pkg in ("webview", "pythonnet", "clr_loader", "pdf2docx", "docx", "cv2"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -29,7 +30,7 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        "tkinter", "matplotlib", "numpy", "pandas", "scipy",
+        "tkinter", "matplotlib", "pandas", "scipy",
         "PyQt5", "PySide2", "PySide6", "IPython", "pytest",
     ],
     noarchive=False,

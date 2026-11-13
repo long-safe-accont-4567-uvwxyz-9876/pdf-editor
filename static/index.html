@@ -61,6 +61,18 @@
     </button>
 
     <div class="menuwrap">
+      <button id="btnConvert" class="btn" title="PDF 与 Word 互相转换">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/></svg>
+        转换
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="menu" id="convertMenu">
+        <button data-mode="pdf2word">PDF 转 Word（.docx）</button>
+        <button data-mode="word2pdf">Word 转 PDF</button>
+      </div>
+    </div>
+
+    <div class="menuwrap">
       <button id="btnPage" class="btn" disabled title="页面操作">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
         页面
@@ -232,7 +244,10 @@
   <i></i>
   <span><kbd>Esc</kbd> 退出</span>
 </div>
-<div class="loading" id="loading" hidden><div class="spinner"></div></div>
+<div class="loading" id="loading" hidden>
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText"></div>
+</div>
 
 <script src="vendor/anime.min.js"></script>
 <script src="app.js"></script>

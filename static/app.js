@@ -44,17 +44,18 @@ const state = {
 /* ------------------------------------------------------------ 基础工具 */
 
 let toastTimer = null;
-function toast(msg, isErr = false) {
+function toast(msg, isErr = false, holdMs = 2400) {
   const el = $('toast');
   el.textContent = msg;
   el.className = 'toast show' + (isErr ? ' err' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2400);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, holdMs);
 }
 
-function setBusy(on) {
+function setBusy(on, text) {
   state.busy = on;
   $('loading').hidden = !on;
+  $('loadingText').textContent = on ? (text || '') : '';
 }
 
 const rgbCss = (a) => `rgb(${a[0]}, ${a[1]}, ${a[2]})`;
@@ -1246,6 +1247,38 @@ $('btnPage').addEventListener('click', (e) => {
   $('pageMenu').classList.toggle('open');
 });
 document.addEventListener('click', () => $('pageMenu').classList.remove('open'));
+
+/* ------------------------------------------------------------ 格式转换 */
+$('btnConvert').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('convertMenu').classList.toggle('open');
+});
+document.addEventListener('click', () => $('convertMenu').classList.remove('open'));
+
+$('convertMenu').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  $('convertMenu').classList.remove('open');
+  await runConvert(btn.dataset.mode);
+});
+
+async function runConvert(mode) {
+  if (state.busy) return;
+  const label = mode === 'pdf2word' ? 'PDF 转 Word' : 'Word 转 PDF';
+  setBusy(true, `正在转换，请稍候…（${label}）`);
+  try {
+    const r = await apiPost('/api/convert/pick', { mode });
+    if (!r || r.cancelled) return;
+    if (!r.ok) throw new Error(r.error || '转换失败');
+    const name = String(r.path || '').split(/[\\/]/).pop();
+    toast(`${label}完成：${name}（用时 ${r.seconds}s）`, false, 4500);
+    apiPost('/api/reveal', { path: r.path }).catch(() => {});
+  } catch (err) {
+    toast(`${label}失败：${err.message}`, true, 6500);
+  } finally {
+    setBusy(false);
+  }
+}
 
 $('pageMenu').addEventListener('click', async (e) => {
   const btn = e.target.closest('button');

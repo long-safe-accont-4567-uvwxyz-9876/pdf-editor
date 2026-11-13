@@ -48,7 +48,8 @@ class OPENFILENAMEW(ctypes.Structure):
     ]
 
 
-def _run(mode: str, default_name: str, initial_dir: str) -> str:
+def _run(mode: str, default_name: str, initial_dir: str,
+         filter_str: str = "", title: str = "", default_ext: str = "pdf") -> str:
     if os.name != "nt":
         return ""
 
@@ -62,7 +63,7 @@ def _run(mode: str, default_name: str, initial_dir: str) -> str:
         buf.value = default_name
 
     # 过滤器：双 \0 结尾
-    flt = "PDF 文件 (*.pdf)\0*.pdf\0所有文件 (*.*)\0*.*\0\0"
+    flt = filter_str or "PDF 文件 (*.pdf)\0*.pdf\0所有文件 (*.*)\0*.*\0\0"
 
     ofn = OPENFILENAMEW()
     ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
@@ -72,15 +73,15 @@ def _run(mode: str, default_name: str, initial_dir: str) -> str:
     ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
     ofn.nMaxFile = 32768
     ofn.lpstrInitialDir = initial_dir or None
-    ofn.lpstrDefExt = "pdf"
+    ofn.lpstrDefExt = default_ext or "pdf"
 
     if mode == "save":
-        ofn.lpstrTitle = "导出 PDF"
+        ofn.lpstrTitle = title or "导出 PDF"
         ofn.Flags = (OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
                      | OFN_EXPLORER | OFN_DONTADDTORECENT)
         fn = ctypes.windll.comdlg32.GetSaveFileNameW
     else:
-        ofn.lpstrTitle = "打开 PDF"
+        ofn.lpstrTitle = title or "打开 PDF"
         ofn.Flags = (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
                      | OFN_EXPLORER | OFN_DONTADDTORECENT)
         fn = ctypes.windll.comdlg32.GetOpenFileNameW
@@ -103,8 +104,11 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "open"
     default_name = sys.argv[2] if len(sys.argv) > 2 else ""
     initial_dir = sys.argv[3] if len(sys.argv) > 3 else ""
+    filter_str = sys.argv[4] if len(sys.argv) > 4 else ""
+    title = sys.argv[5] if len(sys.argv) > 5 else ""
+    default_ext = sys.argv[6] if len(sys.argv) > 6 else "pdf"
     try:
-        out = _run(mode, default_name, initial_dir)
+        out = _run(mode, default_name, initial_dir, filter_str, title, default_ext)
     except Exception:
         out = ""
     sys.stdout.write(out or "")

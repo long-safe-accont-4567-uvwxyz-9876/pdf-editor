@@ -17,6 +17,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import converter
 import desktop
 import paths
 import pdf_engine
@@ -56,7 +57,8 @@ MIME = {
 }
 
 
-def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str:
+def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "",
+                file_types: tuple | None = None, title: str = "", ext: str = "pdf") -> str:
     """弹出系统文件对话框。
 
     三种环境分别处理：
@@ -64,6 +66,10 @@ def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str
       2. PyInstaller 打包但走 Edge 应用模式 → 本进程直接调 Win32，不依赖外部解释器
       3. 源码运行 → 独立子进程，避免阻塞与焦点问题
     """
+    ft = file_types or ("PDF 文件 (*.pdf)", "所有文件 (*.*)")
+    # Win32 的过滤器是「描述\0通配\0...\0\0」
+    win_flt = f"{ft[0]}\0{ft[1]}\0所有文件 (*.*)\0*.*\0\0"
+
     # 1) pywebview
     try:
         win = desktop.get_window()
@@ -75,7 +81,7 @@ def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str
                 kind = fd.SAVE if mode == "save" else fd.OPEN
             else:
                 kind = webview.SAVE_DIALOG if mode == "save" else webview.OPEN_DIALOG
-            kwargs = {"file_types": ("PDF 文件 (*.pdf)", "所有文件 (*.*)")}
+            kwargs = {"file_types": ft}
             if default_name:
                 kwargs["save_filename"] = default_name
             if initial_dir and os.path.isdir(initial_dir):
@@ -91,7 +97,7 @@ def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str
     if getattr(sys, "frozen", False):
         try:
             import native_dialog
-            return native_dialog._run(mode, default_name, initial_dir)
+            return native_dialog._run(mode, default_name, initial_dir, win_flt, title, ext)
         except Exception:
             return ""
 
@@ -101,7 +107,7 @@ def pick_dialog(mode: str, default_name: str = "", initial_dir: str = "") -> str
         cand = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
         if os.path.exists(cand):
             exe = cand
-    args = [exe, DIALOG_PY, mode, default_name, initial_dir]
+    args = [exe, DIALOG_PY, mode, default_name, initial_dir, win_flt, title, ext]
     creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=300,
@@ -325,6 +331,49 @@ class Handler(BaseHTTPRequestHandler):
             sess = ENGINE.get(data.get("doc", ""))
             sess.reset()
             return self._json({"ok": True, "opCount": 0})
+
+        if path == "/api/convert/pick":
+            mode = str(data.get("mode") or "")
+            if mode not in ("pdf2word", "word2pdf"):
+                return self._err("未知转换类型", 400)
+            try:
+                if mode == "pdf2word":
+                    src = pick_dialog("open", file_types=("PDF 文件 (*.pdf)", "*.pdf"),
+                                      title="选择要转成 Word 的 PDF")
+                    if not src:
+                        return self._json({"ok": False, "cancelled": True})
+                    stem = os.path.splitext(os.path.basename(src))[0]
+                    dst = pick_dialog("save", default_name=stem + ".docx",
+                                      initial_dir=os.path.dirname(os.path.abspath(src)),
+                                      file_types=("Word 文档 (*.docx)", "*.docx"),
+                                      title="保存为 Word 文档", ext="docx")
+                    if not dst:
+                        return self._json({"ok": False, "cancelled": True})
+                    if not dst.lower().endswith(".docx"):
+                        dst += ".docx"
+                    return self._json(converter.pdf_to_word(src, dst))
+
+                src = pick_dialog("open",
+                                  file_types=("Word 文档 (*.docx;*.doc;*.rtf)", "*.docx;*.doc;*.rtf"),
+                                  title="选择要转成 PDF 的 Word 文档")
+                if not src:
+                    return self._json({"ok": False, "cancelled": True})
+                stem = os.path.splitext(os.path.basename(src))[0]
+                dst = pick_dialog("save", default_name=stem + ".pdf",
+                                  initial_dir=os.path.dirname(os.path.abspath(src)),
+                                  file_types=("PDF 文件 (*.pdf)", "*.pdf"),
+                                  title="保存为 PDF", ext="pdf")
+                if not dst:
+                    return self._json({"ok": False, "cancelled": True})
+                if not dst.lower().endswith(".pdf"):
+                    dst += ".pdf"
+                return self._json(converter.word_to_pdf(src, dst))
+            except Exception as e:
+                traceback.print_exc()
+                return self._json({"ok": False, "error": str(e)})
+
+        if path == "/api/convert/info":
+            return self._json({"ok": True, **converter.can_convert()})
 
         if path == "/api/export":
             sess = ENGINE.get(data.get("doc", ""))
