@@ -250,7 +250,9 @@ def _para_xml(lines: list[list[dict]], page_w: float, left: float, right: float)
 
     # 行距按原 PDF 的实测行间距算，而不是一律写死 1.5 倍。
     # 写死会让「PDF→Word→PDF」来回转时行距逐轮变大，最后多出空白页。
-    leading = max(size, 1.0) * 1.15
+    # 用 exact 而不是 atLeast：atLeast 会在实测值之上再叠加字体行高，
+    # 导致每转一轮行距就变一次，页数也跟着漂。
+    leading = max(size, 1.0) * 1.2
     if len(lines) >= 2:
         gaps = []
         for i in range(1, len(lines)):
@@ -261,10 +263,13 @@ def _para_xml(lines: list[list[dict]], page_w: float, left: float, right: float)
                 gaps.append(g)
         if gaps:
             gaps.sort()
-            leading = gaps[len(gaps) // 2]
+            # 取偏小的那个（段落内的正常行距），避开段末/段首的大间距
+            leading = gaps[0] if len(gaps) <= 2 else gaps[len(gaps) // 3]
+    # 行距不能小于字号本身，否则文字会挤在一起
+    leading = max(leading, size * 1.05)
 
     ppr = [
-        f'<w:spacing w:line="{_tw(leading)}" w:lineRule="atLeast"'
+        f'<w:spacing w:line="{_tw(leading)}" w:lineRule="exact"'
         f' w:before="0" w:after="0"/>',
         f'<w:ind w:left="{_tw(ind_left)}"/>',
     ]

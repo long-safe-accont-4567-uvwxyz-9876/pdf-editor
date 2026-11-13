@@ -332,7 +332,7 @@ def _para_markup(p: Paragraph, base: dict) -> str:
     return "".join(parts)
 
 
-# ---------------------------------------------------------------- 列表
+# ---------------------------------------------------------------- 列表编号
 
 _LIST_STYLES = ("list bullet", "list number", "list paragraph", "list")
 
@@ -348,30 +348,254 @@ def _style_name(p: Paragraph) -> str:
     except Exception:
         return ""
 
+# OOXML 的编号格式 → 渲染函数
+_CN_DIGITS = "零一二三四五六七八九"
+_CN_ORD = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 
-def _is_list_item(p: Paragraph) -> tuple[bool, int, str]:
-    """判断是否列表项，返回 (是否列表, 层级, 前缀)。"""
-    name = _style_name(p).lower()
-    if not any(k in name for k in _LIST_STYLES):
-        return False, 0, ""
 
-    # 从 numPr 读层级
-    level = 0
-    try:
-        ppr = p._element.find(qn("w:pPr"))
-        if ppr is not None:
+def _roman(n: int) -> str:
+    vals = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+            (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+    out = ""
+    for v, s in vals:
+        while n >= v:
+            out += s
+            n -= v
+    return out or "I"
+
+
+def _letters(n: int, upper: bool) -> str:
+    if n <= 0:
+        return ""
+    s = chr(ord("A") + (n - 1) % 26) * ((n - 1) // 26 + 1)
+    return s if upper else s.lower()
+
+
+def _cn_num(n: int) -> str:
+    """阿拉伯转中文数字（支持到 99，够覆盖常见编号）。"""
+    if n <= 0:
+        return "零"
+    if n < 10:
+        return _CN_DIGITS[n]
+    if n < 20:
+        return "十" + (_CN_DIGITS[n % 10] if n % 10 else "")
+    if n < 100:
+        t, o = divmod(n, 10)
+        return _CN_DIGITS[t] + "十" + (_CN_DIGITS[o] if o else "")
+    return str(n)
+
+
+def _fmt_number(n: int, fmt: str) -> str:
+    """按 OOXML numFmt 把序号转成字符串。"""
+    f = (fmt or "decimal").lower()
+    if f == "decimal":
+        return str(n)
+    if f == "decimalzero":
+        return f"{n:02d}"
+    if f == "decimalenclosedcircle":
+        return _CN_ORD[n - 1] if 0 < n <= len(_CN_ORD) else f"({n})"
+    if f == "decimalenclosedparen":
+        return f"({n})"
+    if f == "decimalfullwidth":
+        return "".join(chr(ord("０") + int(d)) for d in str(n))
+    if f in ("lowerletter",):
+        return _letters(n, False)
+    if f in ("upperletter",):
+        return _letters(n, True)
+    if f == "lowerroman":
+        return _roman(n).lower()
+    if f == "upperroman":
+        return _roman(n)
+    if f in ("chinesecounting", "chinesecountingthousand", "taiwanesecounting",
+             "japanesecounting", "ideographdigital"):
+        return _cn_num(n)
+    if f in ("chineselegal", "chinesecountinglegal"):
+        return _cn_num(n)
+    if f == "none":
+        return ""
+    return str(n)
+
+
+class _Numbering:
+    """解析 docx 的 numbering.xml，按需产出每一项该显示的编号/符号。
+
+    Word 的编号规则是：段落（或它继承的样式）带 numId → numbering.xml 里
+    numId 映射到 abstractNum → abstractNum 的对应层级给出 numFmt / lvlText /
+    start。真正的序号要自己按出现顺序累加，并在换了 numId 时重新开始。
+    """
+
+    def __init__(self, doc):
+        self.ok = False
+        self.num_to_abstract: dict[str, str] = {}
+        self.levels: dict[str, dict[int, dict]] = {}
+        self.start_override: dict[str, dict[int, int]] = {}
+        # abstractId -> {level: 当前序号}；以及 numId -> abstractId
+        self.counters: dict[str, dict[int, int]] = {}
+        self.num_of_abstract: dict[str, str] = {}
+        self._parse(doc)
+
+    def _parse(self, doc) -> None:
+        try:
+            part = doc.part.numbering_part
+        except Exception:
+            return
+        if part is None:
+            return
+        try:
+            root = part.element
+        except Exception:
+            return
+
+        W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+        for num in root.findall(f"{W}num"):
+            nid = num.get(f"{W}numId")
+            ab = num.find(f"{W}abstractNumId")
+            if not nid or ab is None:
+                continue
+            aid = ab.get(f"{W}val")
+            if not aid:
+                continue
+            self.num_to_abstract[nid] = aid
+
+            # lvlOverride 可以改起始值
+            for ov in num.findall(f"{W}lvlOverride"):
+                lv = ov.get(f"{W}ilvl")
+                so = ov.find(f"{W}startOverride")
+                if lv is not None and so is not None:
+                    try:
+                        self.start_override.setdefault(nid, {})[int(lv)] = int(
+                            so.get(f"{W}val") or 1)
+                    except Exception:
+                        pass
+
+        for an in root.findall(f"{W}abstractNum"):
+            aid = an.get(f"{W}abstractNumId")
+            if not aid:
+                continue
+            lv_map: dict[int, dict] = {}
+            for lvl in an.findall(f"{W}lvl"):
+                try:
+                    ilvl = int(lvl.get(f"{W}ilvl") or 0)
+                except Exception:
+                    continue
+                fmt_el = lvl.find(f"{W}numFmt")
+                txt_el = lvl.find(f"{W}lvlText")
+                st_el = lvl.find(f"{W}start")
+                lv_map[ilvl] = {
+                    "fmt": (fmt_el.get(f"{W}val") if fmt_el is not None else "decimal"),
+                    "text": (txt_el.get(f"{W}val") if txt_el is not None else ""),
+                    "start": int(st_el.get(f"{W}val") or 1) if st_el is not None else 1,
+                }
+            self.levels[aid] = lv_map
+
+        self.ok = bool(self.levels)
+
+    def _para_num(self, p: Paragraph) -> tuple[str | None, int]:
+        """取段落生效的 numId 和层级（先看段落自身，再沿样式链）。"""
+        try:
+            chain = _style_chain(p.style)
+        except Exception:
+            chain = []
+
+        # 段落直接写的 numPr 优先
+        try:
+            ppr = p._element.find(qn("w:pPr"))
+            if ppr is not None:
+                npr = ppr.find(qn("w:numPr"))
+                if npr is not None:
+                    n = npr.find(qn("w:numId"))
+                    l = npr.find(qn("w:ilvl"))
+                    if n is not None and n.get(qn("w:val")):
+                        nid = n.get(qn("w:val"))
+                        lv = int(l.get(qn("w:val")) or 0) if l is not None else 0
+                        if nid != "0":
+                            return nid, lv
+        except Exception:
+            pass
+
+        # 再沿样式链找
+        for st in chain:
+            try:
+                el = st.element
+            except Exception:
+                continue
+            if el is None:
+                continue
+            ppr = el.find(qn("w:pPr"))
+            if ppr is None:
+                continue
             npr = ppr.find(qn("w:numPr"))
-            if npr is not None:
-                ilvl = npr.find(qn("w:ilvl"))
-                if ilvl is not None:
-                    level = int(ilvl.get(qn("w:val")) or 0)
-    except Exception:
-        pass
+            if npr is None:
+                continue
+            n = npr.find(qn("w:numId"))
+            l = npr.find(qn("w:ilvl"))
+            if n is not None and n.get(qn("w:val")) and n.get(qn("w:val")) != "0":
+                lv = int(l.get(qn("w:val")) or 0) if l is not None else 0
+                return n.get(qn("w:val")), lv
+        return None, 0
 
-    bullet = "•" if "bullet" in name or "bullet" in name else "•"
-    if "number" in name:
-        bullet = "1."
-    return True, level, bullet
+    def next_label(self, p: Paragraph) -> tuple[bool, int, str, float]:
+        """返回 (是否列表, 层级, 显示前缀, 该层左缩进 pt)。"""
+        if not self.ok:
+            return False, 0, "", 0.0
+
+        nid, lv = self._para_num(p)
+        if not nid:
+            return False, 0, "", 0.0
+
+        aid = self.num_to_abstract.get(nid)
+        if not aid or aid not in self.levels:
+            return False, 0, "", 0.0
+
+        lvdef = self.levels[aid].get(lv)
+        if lvdef is None:
+            # 该层级没有单独定义时，按层级自己造一个模板（多级 1. / 1.1 / 1.1.1），
+            # 直接退到第 0 层会让所有层级都显示成 "2." 这种平级编号
+            if lv > 0:
+                lvdef = {
+                    "fmt": "decimal",
+                    "text": ".".join(f"%{i + 1}" for i in range(lv + 1)),
+                    "start": 1,
+                }
+            else:
+                lvdef = self.levels[aid].get(0) or {}
+
+        start = lvdef.get("start", 1)
+        ov = self.start_override.get(nid, {}).get(lv)
+        if ov is not None:
+            start = ov
+
+        # 每个 abstractNum 一组计数器，层级下降时清空更深的层
+        ctr = self.counters.setdefault(aid, {})
+        if lv not in ctr:
+            ctr[lv] = start - 1
+        ctr[lv] += 1
+        for deeper in [k for k in ctr if k > lv]:
+            del ctr[deeper]
+
+        cur = ctr[lv]
+        fmt = lvdef.get("fmt") or "decimal"
+        text_tpl = lvdef.get("text") or ""
+
+        # 圆点符号统一换成通用字符，Word 用的私有区字符多数字体画不出来
+        if fmt == "bullet":
+            label = "•"
+        elif text_tpl:
+            # lvlText 形如 "%1."  "%1.%2"  "第%1章"
+            def _sub(m):
+                idx = int(m.group(1)) - 1
+                lvd = self.levels[aid].get(idx) or {}
+                val = ctr.get(idx, self.levels[aid].get(idx, {}).get("start", 1))
+                if idx == lv:
+                    val = cur
+                return _fmt_number(val, lvd.get("fmt") or "decimal")
+            label = re.sub(r"%(\d)", _sub, text_tpl)
+            label = label.replace("\uf0b7", "•")
+        else:
+            label = _fmt_number(cur, fmt)
+
+        return True, lv, label, 0.0
 
 
 # ---------------------------------------------------------------- 图片
@@ -443,6 +667,14 @@ def _page_setup(doc) -> dict:
 
 # ---------------------------------------------------------------- 表格
 
+def _text_width(text: str, font: str, size: float) -> float:
+    """测一段文字在指定字体字号下的宽度（pt）。"""
+    try:
+        return pdfmetrics.stringWidth(text or "", font, size)
+    except Exception:
+        return len(text or "") * size * 0.5
+
+
 def _table_flowable(tbl: Table, base_size: float, avail_w: float):
     rows = []
     max_cols = 0
@@ -462,13 +694,43 @@ def _table_flowable(tbl: Table, base_size: float, avail_w: float):
         while len(r) < max_cols:
             r.append("")
 
+    cell_size = max(6.0, base_size - 1)
+    font = _resolve_font(_pick_family(None))
     style = ParagraphStyle(
-        "tbl", fontName=_resolve_font(_pick_family(None)), fontSize=max(6, base_size - 1),
-        leading=max(6, base_size - 1) * 1.45, wordWrap="CJK",
+        "tbl", fontName=font, fontSize=cell_size,
+        leading=cell_size * 1.45, wordWrap="CJK",
     )
     data = [[RLParagraph(c or "", style) for c in r] for r in rows]
-    col_w = avail_w / max_cols
-    t = RLTable(data, colWidths=[col_w] * max_cols, repeatRows=1)
+
+    # ---- 列宽按内容自适应 ----
+    # 先量每列「最长一行」的自然宽度，再按比例分配画布宽度。
+    # 但要保证：每列至少能放下一个字，也不能让某列独占整页。
+    pad = 10.0                      # 左右 padding + 边框余量
+    natural = [0.0] * max_cols
+    for r in rows:
+        for ci in range(max_cols):
+            raw = re.sub(r"<[^>]+>", "", r[ci] or "")
+            # 单元格内换行的每一行单独量，取最长
+            widest = max((_text_width(line, font, cell_size)
+                          for line in raw.split("\n")), default=0.0)
+            natural[ci] = max(natural[ci], widest + pad)
+
+    total_natural = sum(natural) or 1.0
+    min_w = cell_size * 2.0         # 至少能放两个字
+
+    if total_natural <= avail_w:
+        # 内容放得下：按自然宽度给，再把剩余空间均摊，避免表格缩成一小坨
+        spare = avail_w - total_natural
+        col_widths = [n + spare / max_cols for n in natural]
+    else:
+        # 内容超宽：按比例压缩，但每列不低于最小宽度
+        col_widths = [max(min_w, n * avail_w / total_natural) for n in natural]
+        over = sum(col_widths)
+        if over > 0 and over != avail_w:
+            # 等比收敛回可用宽度
+            col_widths = [w * avail_w / over for w in col_widths]
+
+    t = RLTable(data, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#8a8f99")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -552,13 +814,20 @@ def convert(src: str, dst: str, progress=None) -> dict:
     story: list[Any] = []
     stats = {"paras": 0, "tables": 0, "images": 0, "chars": 0}
 
+    # 编号引擎：解析 numbering.xml，按出现顺序累加序号
+    try:
+        numbering = _Numbering(doc)
+    except Exception:
+        numbering = None
+
     _p("正在解析文档结构", 0.15)
 
     for child in doc.element.body.iterchildren():
         tag = child.tag.split("}")[-1]
         if tag == "p":
             para = Paragraph(child, doc)
-            _emit_paragraph(para, doc, story, setup, body_w, fams, default_family, stats)
+            _emit_paragraph(para, doc, story, setup, body_w, fams, default_family,
+                            stats, numbering)
         elif tag == "tbl":
             tbl = Table(child, doc)
             fl = _table_flowable(tbl, 10.5, body_w)
@@ -608,9 +877,14 @@ def _header_text(doc) -> str:
     return ""
 
 
-def _emit_paragraph(para, doc, story, setup, body_w, fams, default_family, stats):
+def _emit_paragraph(para, doc, story, setup, body_w, fams, default_family, stats,
+                    numbering=None):
     base = _para_effective(para)
-    is_list, level, bullet = _is_list_item(para)
+    # 列表编号由 numbering.xml 驱动，能算出 1. 2. 3. 以及多级 1.1 / (a) / ①
+    if numbering is not None:
+        is_list, level, bullet, _ = numbering.next_label(para)
+    else:
+        is_list, level, bullet = False, 0, ""
 
     text = para.text if para.text is not None else ""
 
@@ -657,9 +931,21 @@ def _emit_paragraph(para, doc, story, setup, body_w, fams, default_family, stats
                 leading = pt_val
 
     indent = base["first_line"]
+    list_indent = 0.0
     if is_list:
-        indent = 0
-        markup = f'{"&nbsp;" * (level * 4)}{_esc(bullet)}&nbsp;{markup}'
+        # 列表项用「悬挂缩进」：编号比正文向左突出 hang 的距离，
+        # 正文与续行都对齐在 (层级缩进 + hang) 处，层级越高越往右。
+        # 注意 hang 必须小于层级缩进，否则二级列表会被拉回左边界，看不出层次。
+        level_indent = level * 22.0
+        hang = 18.0
+        list_indent = level_indent + hang
+        indent = -hang
+        if bullet:
+            markup = f'{_esc(bullet)}&nbsp;&nbsp;{markup}'
+        else:
+            # 编号格式为 none，当作纯缩进段落
+            indent = 0
+            list_indent = level_indent
 
     style = ParagraphStyle(
         f"p{stats['paras']}",
@@ -667,7 +953,7 @@ def _emit_paragraph(para, doc, story, setup, body_w, fams, default_family, stats
         fontSize=size,
         leading=leading,
         alignment=base["align"],
-        leftIndent=max(0.0, base["left"]) + (level * 12 if is_list else 0),
+        leftIndent=max(0.0, base["left"]) + list_indent,
         rightIndent=max(0.0, base["right"]),
         firstLineIndent=indent or 0,
         spaceBefore=max(0.0, base["space_before"] or 0),
