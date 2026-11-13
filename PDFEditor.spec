@@ -22,13 +22,27 @@ for pkg in ("webview", "pythonnet", "clr_loader"):
     except Exception:
         pass
 
-# PyMuPDF 2.1 自带一套 AI 版面分析模型（onnx，约 30MB），本编辑器只做文字/图片
-# 的提取与写入，完全用不到它，排除掉能显著减小安装包
+# PyMuPDF 2.x 的 wheel 里带了一整套 AI 版面分析模型（layout/ 目录，约 50MB：
+# onnx 模型 + 字体 + libtesseract 等）。本编辑器只做文字/图片的提取与写入，
+# 这些模型一个都用不到，全部剔除，否则安装包会白胖一大圈。
+_SKIP_PARTS = ("layout", "onnx", "mupdf-devel")
+
+
+def _keep(entry) -> bool:
+    """True = 保留。entry 形如 (source, dest_in_bundle)。"""
+    try:
+        src, dst = str(entry[0]).replace("\\", "/").lower(), str(entry[1]).replace("\\", "/").lower()
+    except Exception:
+        return True
+    parts = (src + "/" + dst).split("/")
+    return not any(p in parts for p in _SKIP_PARTS)
+
+
 a = Analysis(
     ["app.py"],
     pathex=[],
     binaries=binaries,
-    datas=[(p, dst) for (p, dst) in datas if "onnx" not in p.lower()],
+    datas=[e for e in datas if _keep(e)],
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
@@ -36,9 +50,15 @@ a = Analysis(
         "tkinter", "matplotlib", "pandas", "scipy",
         "PyQt5", "PySide2", "PySide6", "IPython", "pytest",
         "pymupdf.pymupdf_layout", "pymupdf.layout",
+        "pymupdf._mupdf_layout", "onnxruntime",
     ],
     noarchive=False,
 )
+
+# Analysis 之后再把 hook 自动塞进来的 layout 资源清一遍，
+# PyMuPDF 的 hook 优先级高于 datas 过滤，只在 datas 里剔除不够
+a.datas = [e for e in a.datas if _keep(e)]
+a.binaries = [e for e in a.binaries if _keep(e)]
 
 pyz = PYZ(a.pure, a.zipped_data)
 
